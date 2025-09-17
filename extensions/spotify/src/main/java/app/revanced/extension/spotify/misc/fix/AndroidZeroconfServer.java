@@ -1,6 +1,7 @@
 package app.revanced.extension.spotify.misc.fix;
 
 
+import com.google.protobuf.ByteString;
 import android.content.Context;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
@@ -8,6 +9,7 @@ import android.util.Log;
 import app.revanced.extensions.spotify.okhttp3.HttpUrl;
 import com.google.gson.JsonObject;
 import com.spotify.connectstate.Connect;
+import com.spotify.Authentication;
 import org.jetbrains.annotations.NonNls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -21,6 +23,7 @@ import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.*;
 import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -45,13 +48,10 @@ public class AndroidZeroconfServer implements Closeable {
             Log.i("AndroidZeroconfServer", message);
         }
         
-        void info(String message, Object... args) {
-            Log.i("AndroidZeroconfServer", String.format(message, args));
+        void trace(String message) {
+            Log.d("AndroidZeroconfServer", message);
         }
-        
-        void trace(String message, Object... args) {
-            Log.d("AndroidZeroconfServer", String.format(message, args));
-        }
+
         void warn(String message) {
             Log.w("AndroidZeroconfServer", message);
         }
@@ -158,7 +158,7 @@ public class AndroidZeroconfServer implements Closeable {
         nsdManager.registerService(info, NsdManager.PROTOCOL_DNS_SD, new NsdManager.RegistrationListener() {
             @Override
             public void onRegistrationFailed(NsdServiceInfo nsdServiceInfo, int i) {
-
+                LOGGER.error("Registration failed");
             }
 
             @Override
@@ -300,7 +300,7 @@ public class AndroidZeroconfServer implements Closeable {
 
         synchronized (connectionLock) {
             if (username.equals(connectingUsername)) {
-                LOGGER.info("{} is already trying to connect.", username);
+                LOGGER.info(username + " is already trying to connect.");
 
                 out.write(httpVersion.getBytes());
                 out.write(" 403 Forbidden".getBytes()); // I don't think this is the Spotify way
@@ -383,6 +383,22 @@ public class AndroidZeroconfServer implements Closeable {
                     .setPreferredLocale(inner.preferredLocale)
                     .blob(username, decrypted)
                     .create();
+
+            Authentication.APWelcome apWelcome = session.apWelcome();
+            ByteString reusable = apWelcome.getReusableAuthCredentials();
+            Authentication.AuthenticationType reusableType = apWelcome.getReusableAuthCredentialsType();
+
+            JsonObject obj = new JsonObject();
+            obj.addProperty("username", apWelcome.getCanonicalUsername());
+            obj.addProperty("credentials", Utils.toBase64(reusable.toByteArray()));
+            obj.addProperty("type", reusableType.name());
+
+            if (inner.conf.storedCredentialsFile == null) throw new IllegalArgumentException();
+            if (!inner.conf.storedCredentialsFile.exists()) inner.conf.storedCredentialsFile.createNewFile();
+            try (FileOutputStream outCred = new FileOutputStream(inner.conf.storedCredentialsFile)) {
+                outCred.write(obj.toString().getBytes());
+                outCred.close();
+            }
 
             synchronized (connectionLock) {
                 connectingUsername = null;
@@ -479,7 +495,7 @@ public class AndroidZeroconfServer implements Closeable {
 
         HttpRunner(int port) throws IOException {
             serverSocket = new ServerSocket(port);
-            LOGGER.info("Zeroconf HTTP server started successfully on port {}!", port);
+            LOGGER.info("Zeroconf HTTP server started successfully on port " +port + "!");
         }
 
         @Override
@@ -543,7 +559,7 @@ public class AndroidZeroconfServer implements Closeable {
             }
 
             if (!hasValidSession())
-                LOGGER.trace("Handling request: {} {} {}, headers: {}", method, path, httpVersion, headers);
+                LOGGER.trace("Handling request: " + method + " " + path + " " + httpVersion + ", headers: " +  headers);
 
             Map<String, String> params;
             if (Objects.equals(method, "POST")) {
